@@ -35,6 +35,16 @@ namespace Common.Textures.Data
         TEXCOMP_8BIT_RGB16_A8 = 0x8F,
     }
 
+    public enum TextureAlphaUsageType : byte { None = 0, PunchThrough = 1, Modulated = 2 }
+    public enum TextureAlphaBlendType : byte
+    {
+        SrcCopy = 0, Blend = 1, Additive = 2, Subtractive = 3, Overbright = 4,
+        DestBlend = 5, DestAdditive = 6, DestSubtractive = 7, DestOverbright = 8
+    }
+    public enum TextureScrollType : byte { None = 0, Smooth = 1, Snap = 2, OffsetScale = 3 }
+    [Flags] public enum TextureTilableUV : byte { Clamp = 0, URepeat = 0x01, VRepeat = 0x02, UMirror = 0x04, VMirror = 0x08 }
+    [Flags] public enum TextureRenderFlags : byte { Unknown = 0x01, DisableCulling = 0x02 }
+
     public class Texture : BasicResource
     {
         public string Name { get; set; }
@@ -64,6 +74,19 @@ namespace Common.Textures.Data
 
         public uint Format { get; set; }
         public TextureCompressionType CompressionType { get; set; }
+
+        // Populated only for Version3Tpk-sourced packs (Carbon/ProStreet/Undercover-era -
+        // see Version3Tpk.ReadTexture). Every other TpkManager subclass leaves these null:
+        // the on-disk bytes exist at the same struct offsets there too, but these enum
+        // meanings were only cross-checked against Carbon's real layout (hyperlinked),
+        // not verified for the other formats yet.
+        public TextureAlphaUsageType? AlphaUsageType { get; set; }
+        public TextureAlphaBlendType? AlphaBlendType { get; set; }
+        public TextureScrollType? ScrollType { get; set; }
+        public TextureTilableUV? TilableUV { get; set; }
+        public TextureRenderFlags? RenderFlags { get; set; }
+        public short? ScrollSpeedS { get; set; }
+        public short? ScrollSpeedT { get; set; }
 
         /// <summary>
         /// Writes DDS data to the given stream.

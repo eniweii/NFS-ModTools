@@ -1,0 +1,286 @@
+diff --git a/AssetDumper/CarbonMaterialManifestBuilder.cs b/AssetDumper/CarbonMaterialManifestBuilder.cs
+new file mode 100644
+index 0000000..b73b8e5
+--- /dev/null
++++ b/AssetDumper/CarbonMaterialManifestBuilder.cs
+@@ -0,0 +1,96 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Text.Json;
++using Common.Geometry;
++using Common.Textures.Data;
++
++namespace AssetDumper
++{
++    /// <summary>
++    /// Builds one structured manifest entry per Carbon material: its role-mapped
++    /// texture slots (diffuse/normal/specular/height/opacity) plus each texture's
++    /// real render attributes (alpha usage/blend, tiling, scroll, flags). Replaces
++    /// the old materialtextureusage.txt scratch dump for Carbon specifically.
++    /// Kept in its own class/file, same as UndercoverLayerClassifier is for
++    /// Undercover, rather than growing ExportBundleCommand - Carbon only for now;
++    /// Undercover/ProStreet have their own slot-resolution logic and aren't wired
++    /// into this yet.
++    /// </summary>
++    public static class CarbonMaterialManifestBuilder
++    {
++        public class TextureEntry
++        {
++            public string Role { get; set; }
++            public string Hash { get; set; }
++            public string Name { get; set; }
++            public string AlphaUsageType { get; set; }
++            public string AlphaBlendType { get; set; }
++            public string TilableUV { get; set; }
++            public string RenderFlags { get; set; }
++            public string ScrollType { get; set; }
++            public short? ScrollSpeedS { get; set; }
++            public short? ScrollSpeedT { get; set; }
++        }
++
++        public class MaterialEntry
++        {
++            public string Solid { get; set; }
++            public string Material { get; set; }
++            public string EffectId { get; set; }
++            public string SortKey { get; set; }
++            public List<TextureEntry> Textures { get; set; } = new();
++        }
++
++        private static TextureEntry Describe(string role, uint? hash, Func<uint, Texture> resolveTexture)
++        {
++            if (hash is not { } h || h == 0) return null;
++
++            var tex = resolveTexture(h);
++            return new TextureEntry
++            {
++                Role = role,
++                Hash = $"0x{h:X8}",
++                Name = tex?.Name,
++                AlphaUsageType = tex?.AlphaUsageType?.ToString(),
++                AlphaBlendType = tex?.AlphaBlendType?.ToString(),
++                TilableUV = tex?.TilableUV?.ToString(),
++                RenderFlags = tex?.RenderFlags?.ToString(),
++                ScrollType = tex?.ScrollType?.ToString(),
++                ScrollSpeedS = tex?.ScrollSpeedS,
++                ScrollSpeedT = tex?.ScrollSpeedT,
++            };
++        }
++
++        public static MaterialEntry BuildEntry(string solidName, string materialExportName, CarbonMaterial material,
++            Func<uint, Texture> resolveTexture)
++        {
++            var entry = new MaterialEntry
++            {
++                Solid = solidName,
++                Material = materialExportName,
++                EffectId = $"0x{material.EffectId:X4}",
++                SortKey = $"0x{material.SortKey:X8}",
++            };
++
++            void Add(string role, uint? hash)
++            {
++                var tex = Describe(role, hash, resolveTexture);
++                if (tex != null) entry.Textures.Add(tex);
++            }
++
++            Add("diffuse", material.DiffuseTextureHash);
++            Add("normal", material.NormalTextureHash);
++            Add("specular", material.SpecularTextureHash);
++            Add("height", material.HeightTextureHash);
++            Add("opacity", material.OpacityTextureHash);
++
++            return entry;
++        }
++
++        private static readonly JsonSerializerOptions Options = new() { WriteIndented = false };
++
++        public static void Append(string outputPath, MaterialEntry entry) =>
++            File.AppendAllText(outputPath, JsonSerializer.Serialize(entry, Options) + Environment.NewLine);
++    }
++}
+diff --git a/AssetDumper/ExportBundleCommand.cs b/AssetDumper/ExportBundleCommand.cs
+index 52167df..d7d90be 100644
+--- a/AssetDumper/ExportBundleCommand.cs
++++ b/AssetDumper/ExportBundleCommand.cs
+@@ -469,7 +469,7 @@ public class ExportBundleCommand : BaseCommand
+                 ExportSceneFbx(scene, outputPath, textureInfos, texturePaths, lightPacks);
+                 break;
+             case SceneFormat.Collada:
+-                ExportSceneCollada(scene, outputPath, texturePaths, lightPacks);
++                ExportSceneCollada(scene, outputPath, textureInfos, texturePaths, lightPacks);
+                 break;
+             default:
+                 throw new NotImplementedException(sceneFormat.ToString());
+@@ -687,6 +687,16 @@ public class ExportBundleCommand : BaseCommand
+                     fbxMaterialBuilder =
+                         fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.SpecularColor, fbxSpecularMap);
+ 
++                if (material.HeightTextureHash is { } heightTextureHash &&
++                    textureKeyToFbxTexture.TryGetValue(heightTextureHash, out var fbxHeightMap))
++                    fbxMaterialBuilder =
++                        fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.HeightMap, fbxHeightMap);
++
++                if (material.OpacityTextureHash is { } opacityTextureHash &&
++                    textureKeyToFbxTexture.TryGetValue(opacityTextureHash, out var fbxOpacityMap))
++                    fbxMaterialBuilder =
++                        fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.TransparentColor, fbxOpacityMap);
++
+                 if (material is IEffectBasedMaterial effectBasedMaterial)
+                 {
+                     string[] possibleEffectIds;
+@@ -1131,8 +1141,8 @@ public class ExportBundleCommand : BaseCommand
+         return angles;
+     }
+ 
+-    internal static void ExportSceneCollada(SceneExport scene, string outputPath, Dictionary<uint, string> texturePaths,
+-    List<LightPack> lightPacks)
++    internal static void ExportSceneCollada(SceneExport scene, string outputPath, Dictionary<uint, Texture> textureInfos,
++    Dictionary<uint, string> texturePaths, List<LightPack> lightPacks)
+     {
+         var swTotal = System.Diagnostics.Stopwatch.StartNew();
+ 
+@@ -1373,6 +1383,13 @@ public class ExportBundleCommand : BaseCommand
+                     File.AppendAllText("materialtextureusage.txt", usageLog.ToString());
+                 }
+ 
++                if (material is CarbonMaterial carbonMaterial)
++                {
++                    var manifestEntry = CarbonMaterialManifestBuilder.BuildEntry(solid.Name, exportName, carbonMaterial,
++                        hash => textureInfos.TryGetValue(hash, out var t) ? t : null);
++                    CarbonMaterialManifestBuilder.Append("carbon_materials.jsonl", manifestEntry);
++                }
++
+                 var diffuseTextureId = ResolveDiffuseHash(material);
+                 var effectIdBase = GetMaterialEffectId(solid, materialIndex);
+ 
+diff --git a/Common/Geometry/CarbonSolidListReader.cs b/Common/Geometry/CarbonSolidListReader.cs
+index ffae595..f5877b2 100644
+--- a/Common/Geometry/CarbonSolidListReader.cs
++++ b/Common/Geometry/CarbonSolidListReader.cs
+@@ -5,9 +5,10 @@ using Common.Geometry.Data;
+ 
+ namespace Common.Geometry
+ {
+-    public class CarbonMaterial : SolidObjectMaterial, IEffectBasedMaterial
++    public class CarbonMaterial : SolidObjectMaterial, IEffectBasedMaterial, ISortedMaterial
+     {
+         public uint EffectId { get; set; }
++        public uint SortKey { get; set; }
+     }
+ 
+     public class CarbonSolidListReader : SolidListReader
+diff --git a/Common/Geometry/CarbonSolidReader.cs b/Common/Geometry/CarbonSolidReader.cs
+index 86f398d..af7efaf 100644
+--- a/Common/Geometry/CarbonSolidReader.cs
++++ b/Common/Geometry/CarbonSolidReader.cs
+@@ -189,7 +189,14 @@ public class CarbonSolidReader : SolidReader<CarbonObject, CarbonMaterial>
+                 SpecularTextureHash = shadingGroup.SpecularMapId == shadingGroup.DiffuseMapId
+                     ? null
+                     : Solid.TextureHashes[shadingGroup.SpecularMapId],
++                HeightTextureHash = shadingGroup.HeightMapId == shadingGroup.DiffuseMapId
++                    ? null
++                    : Solid.TextureHashes[shadingGroup.HeightMapId],
++                OpacityTextureHash = shadingGroup.OpacityMapId == shadingGroup.DiffuseMapId
++                    ? null
++                    : Solid.TextureHashes[shadingGroup.OpacityMapId],
+                 EffectId = shadingGroup.EffectId,
++                SortKey = shadingGroup.TextureSortKey,
+                 VertexSetIndex = streamIndex
+             };
+ 
+diff --git a/Common/Geometry/Data/SolidObjectMaterial.cs b/Common/Geometry/Data/SolidObjectMaterial.cs
+index a4a4d38..c8f9a60 100644
+--- a/Common/Geometry/Data/SolidObjectMaterial.cs
++++ b/Common/Geometry/Data/SolidObjectMaterial.cs
+@@ -21,6 +21,8 @@ namespace Common.Geometry.Data
+         public uint DiffuseTextureHash { get; set; }
+         public uint? NormalTextureHash { get; set; }
+         public uint? SpecularTextureHash { get; set; }
++        public uint? HeightTextureHash { get; set; }
++        public uint? OpacityTextureHash { get; set; }
+ 
+         // Second slot from the primary TextureNumber/TextureHashes array (index-based),
+         // present when NumTextures > 1. Likely candidate for the blend-mask texture on
+diff --git a/Common/Textures/Data/TexturePack.cs b/Common/Textures/Data/TexturePack.cs
+index f2128d8..15d45f2 100644
+--- a/Common/Textures/Data/TexturePack.cs
++++ b/Common/Textures/Data/TexturePack.cs
+@@ -35,6 +35,16 @@ namespace Common.Textures.Data
+         TEXCOMP_8BIT_RGB16_A8 = 0x8F,
+     }
+ 
++    public enum TextureAlphaUsageType : byte { None = 0, PunchThrough = 1, Modulated = 2 }
++    public enum TextureAlphaBlendType : byte
++    {
++        SrcCopy = 0, Blend = 1, Additive = 2, Subtractive = 3, Overbright = 4,
++        DestBlend = 5, DestAdditive = 6, DestSubtractive = 7, DestOverbright = 8
++    }
++    public enum TextureScrollType : byte { None = 0, Smooth = 1, Snap = 2, OffsetScale = 3 }
++    [Flags] public enum TextureTilableUV : byte { Clamp = 0, URepeat = 0x01, VRepeat = 0x02, UMirror = 0x04, VMirror = 0x08 }
++    [Flags] public enum TextureRenderFlags : byte { Unknown = 0x01, DisableCulling = 0x02 }
++
+     public class Texture : BasicResource
+     {
+         public string Name { get; set; }
+@@ -65,6 +75,19 @@ namespace Common.Textures.Data
+         public uint Format { get; set; }
+         public TextureCompressionType CompressionType { get; set; }
+ 
++        // Populated only for Version3Tpk-sourced packs (Carbon/ProStreet/Undercover-era -
++        // see Version3Tpk.ReadTexture). Every other TpkManager subclass leaves these null:
++        // the on-disk bytes exist at the same struct offsets there too, but these enum
++        // meanings were only cross-checked against Carbon's real layout (hyperlinked),
++        // not verified for the other formats yet.
++        public TextureAlphaUsageType? AlphaUsageType { get; set; }
++        public TextureAlphaBlendType? AlphaBlendType { get; set; }
++        public TextureScrollType? ScrollType { get; set; }
++        public TextureTilableUV? TilableUV { get; set; }
++        public TextureRenderFlags? RenderFlags { get; set; }
++        public short? ScrollSpeedS { get; set; }
++        public short? ScrollSpeedT { get; set; }
++
+         /// <summary>
+         /// Writes DDS data to the given stream.
+         /// </summary>
+diff --git a/Common/Textures/Version3Tpk.cs b/Common/Textures/Version3Tpk.cs
+index 9207924..fc31d6e 100644
+--- a/Common/Textures/Version3Tpk.cs
++++ b/Common/Textures/Version3Tpk.cs
+@@ -155,7 +155,7 @@ namespace Common.Textures
+ 
+             var name = new string(br.ReadChars(nameLength)).TrimEnd('\0');
+ 
+-            _texturePack.Textures.Add(new Texture
++            var realTexture = new Texture
+             {
+                 Width = texture.Width,
+                 Height = texture.Height,
+@@ -168,9 +168,24 @@ namespace Common.Textures
+                 TypeHash = texture.ClassNameHash,
+                 Format = 0,
+                 PitchOrLinearSize = texture.BaseImageSize,
+-            });
++            };
+ 
+-            return _texturePack.Textures[_texturePack.Textures.Count - 1];
++            // Confirmed decode is Carbon-verified only - gate on the reader type so
++            // this block stays correct if it's ever reused as-is in another Tpk version file.
++            if (this is Version3Tpk)
++            {
++                realTexture.AlphaUsageType = (TextureAlphaUsageType)texture.AlphaUsageType;
++                realTexture.AlphaBlendType = (TextureAlphaBlendType)texture.AlphaBlendType;
++                realTexture.ScrollType = (TextureScrollType)texture.ScrollType;
++                realTexture.TilableUV = (TextureTilableUV)texture.TilableUV;
++                realTexture.RenderFlags = (TextureRenderFlags)texture.Flags;
++                realTexture.ScrollSpeedS = texture.ScrollSpeedS;
++                realTexture.ScrollSpeedT = texture.ScrollSpeedT;
++            }
++
++            _texturePack.Textures.Add(realTexture);
++
++            return realTexture;
+         }
+ 
+         [StructLayout(LayoutKind.Sequential, Pack = 1)]

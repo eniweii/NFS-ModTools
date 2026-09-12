@@ -21,6 +21,8 @@ namespace Common.Geometry.Data
         public uint DiffuseTextureHash { get; set; }
         public uint? NormalTextureHash { get; set; }
         public uint? SpecularTextureHash { get; set; }
+        public uint? HeightTextureHash { get; set; }
+        public uint? OpacityTextureHash { get; set; }
 
         // Second slot from the primary TextureNumber/TextureHashes array (index-based),
         // present when NumTextures > 1. Likely candidate for the blend-mask texture on

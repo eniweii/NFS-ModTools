@@ -155,7 +155,7 @@ namespace Common.Textures
 
             var name = new string(br.ReadChars(nameLength)).TrimEnd('\0');
 
-            _texturePack.Textures.Add(new Texture
+            var realTexture = new Texture
             {
                 Width = texture.Width,
                 Height = texture.Height,
@@ -168,9 +168,24 @@ namespace Common.Textures
                 TypeHash = texture.ClassNameHash,
                 Format = 0,
                 PitchOrLinearSize = texture.BaseImageSize,
-            });
+            };
 
-            return _texturePack.Textures[_texturePack.Textures.Count - 1];
+            // Confirmed decode is Carbon-verified only - gate on the reader type so
+            // this block stays correct if it's ever reused as-is in another Tpk version file.
+            if (this is Version3Tpk)
+            {
+                realTexture.AlphaUsageType = (TextureAlphaUsageType)texture.AlphaUsageType;
+                realTexture.AlphaBlendType = (TextureAlphaBlendType)texture.AlphaBlendType;
+                realTexture.ScrollType = (TextureScrollType)texture.ScrollType;
+                realTexture.TilableUV = (TextureTilableUV)texture.TilableUV;
+                realTexture.RenderFlags = (TextureRenderFlags)texture.Flags;
+                realTexture.ScrollSpeedS = texture.ScrollSpeedS;
+                realTexture.ScrollSpeedT = texture.ScrollSpeedT;
+            }
+
+            _texturePack.Textures.Add(realTexture);
+
+            return realTexture;
         }
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]

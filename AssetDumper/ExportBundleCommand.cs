@@ -469,7 +469,7 @@ public class ExportBundleCommand : BaseCommand
                 ExportSceneFbx(scene, outputPath, textureInfos, texturePaths, lightPacks);
                 break;
             case SceneFormat.Collada:
-                ExportSceneCollada(scene, outputPath, texturePaths, lightPacks);
+                ExportSceneCollada(scene, outputPath, textureInfos, texturePaths, lightPacks);
                 break;
             default:
                 throw new NotImplementedException(sceneFormat.ToString());
@@ -686,6 +686,16 @@ public class ExportBundleCommand : BaseCommand
                     textureKeyToFbxTexture.TryGetValue(specularTextureHash, out var fbxSpecularMap))
                     fbxMaterialBuilder =
                         fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.SpecularColor, fbxSpecularMap);
+
+                if (material.HeightTextureHash is { } heightTextureHash &&
+                    textureKeyToFbxTexture.TryGetValue(heightTextureHash, out var fbxHeightMap))
+                    fbxMaterialBuilder =
+                        fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.HeightMap, fbxHeightMap);
+
+                if (material.OpacityTextureHash is { } opacityTextureHash &&
+                    textureKeyToFbxTexture.TryGetValue(opacityTextureHash, out var fbxOpacityMap))
+                    fbxMaterialBuilder =
+                        fbxMaterialBuilder.WithChannel(MaterialBuilder.ChannelType.TransparentColor, fbxOpacityMap);
 
                 if (material is IEffectBasedMaterial effectBasedMaterial)
                 {
@@ -1131,8 +1141,8 @@ public class ExportBundleCommand : BaseCommand
         return angles;
     }
 
-    internal static void ExportSceneCollada(SceneExport scene, string outputPath, Dictionary<uint, string> texturePaths,
-    List<LightPack> lightPacks)
+    internal static void ExportSceneCollada(SceneExport scene, string outputPath, Dictionary<uint, Texture> textureInfos,
+    Dictionary<uint, string> texturePaths, List<LightPack> lightPacks)
     {
         var swTotal = System.Diagnostics.Stopwatch.StartNew();
 
@@ -1371,6 +1381,13 @@ public class ExportBundleCommand : BaseCommand
 
                     usageLog.AppendLine();
                     File.AppendAllText("materialtextureusage.txt", usageLog.ToString());
+                }
+
+                if (material is CarbonMaterial carbonMaterial)
+                {
+                    var manifestEntry = CarbonMaterialManifestBuilder.BuildEntry(solid.Name, exportName, carbonMaterial,
+                        hash => textureInfos.TryGetValue(hash, out var t) ? t : null);
+                    CarbonMaterialManifestBuilder.Append("carbon_materials.jsonl", manifestEntry);
                 }
 
                 var diffuseTextureId = ResolveDiffuseHash(material);

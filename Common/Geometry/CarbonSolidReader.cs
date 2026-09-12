@@ -189,7 +189,14 @@ public class CarbonSolidReader : SolidReader<CarbonObject, CarbonMaterial>
                 SpecularTextureHash = shadingGroup.SpecularMapId == shadingGroup.DiffuseMapId
                     ? null
                     : Solid.TextureHashes[shadingGroup.SpecularMapId],
+                HeightTextureHash = shadingGroup.HeightMapId == shadingGroup.DiffuseMapId
+                    ? null
+                    : Solid.TextureHashes[shadingGroup.HeightMapId],
+                OpacityTextureHash = shadingGroup.OpacityMapId == shadingGroup.DiffuseMapId
+                    ? null
+                    : Solid.TextureHashes[shadingGroup.OpacityMapId],
                 EffectId = shadingGroup.EffectId,
+                SortKey = shadingGroup.TextureSortKey,
                 VertexSetIndex = streamIndex
             };
 
