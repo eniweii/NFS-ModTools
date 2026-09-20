@@ -5,9 +5,10 @@ using Common.Geometry.Data;
 
 namespace Common.Geometry;
 
-public class World09Material : SolidObjectMaterial, IEffectBasedMaterial
+public class World09Material : SolidObjectMaterial, IEffectBasedMaterial, ISortedMaterial
 {
     public uint EffectId { get; set; }
+    public uint SortKey { get; set; }
 }
 
 public class World09SolidListReader : SolidListReader

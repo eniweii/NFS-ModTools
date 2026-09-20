@@ -189,7 +189,14 @@ public class World09SolidReader : SolidReader<World09Object, World09Material>
                 SpecularTextureHash = shadingGroup.SpecularMapId == shadingGroup.DiffuseMapId
                     ? null
                     : Solid.TextureHashes[shadingGroup.SpecularMapId],
+                HeightTextureHash = shadingGroup.HeightMapId == shadingGroup.DiffuseMapId
+                    ? null
+                    : Solid.TextureHashes[shadingGroup.HeightMapId],
+                OpacityTextureHash = shadingGroup.OpacityMapId == shadingGroup.DiffuseMapId
+                    ? null
+                    : Solid.TextureHashes[shadingGroup.OpacityMapId],
                 EffectId = shadingGroup.EffectId,
+                SortKey = shadingGroup.TextureSortKey,
                 VertexSetIndex = streamIndex
             };
 

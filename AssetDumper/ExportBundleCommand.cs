@@ -6,6 +6,7 @@ using Common.Geometry.Data;
 using Common.Lights.Data;
 using Common.Scenery.Data;
 using Common.Textures.Data;
+using Common.WorldAnim.Data;
 using FBXSharp;
 using FBXSharp.Core;
 using FBXSharp.Objective;
@@ -111,9 +112,7 @@ public class ExportBundleCommand : BaseCommand
             {
                 cm.Read(file);
                 sw.Stop();
-                var fileResources = (from c in cm.Chunks
-                                     where c.Resource != null
-                                     select c.Resource).ToList();
+                var fileResources = FlattenResources(cm.Chunks).ToList();
                 resources.AddRange(fileResources);
                 Log.Information("Read {NumResources} resource(s) from {FilePath} in {ElapsedDurationMS}ms",
                     fileResources.Count,
@@ -139,6 +138,23 @@ public class ExportBundleCommand : BaseCommand
         }
 
         return 0;
+    }
+
+    // cm.Chunks only holds top-level chunks - anything that landed inside
+    // Chunk.SubChunks (because ChunkManager's default case recursed into an
+    // unrecognized container) was previously invisible here even if a nested
+    // chunk's Resource got set. Recurse so nothing nested is silently dropped.
+    private static IEnumerable<BasicResource> FlattenResources(IEnumerable<Chunk> chunks)
+    {
+        foreach (var chunk in chunks)
+        {
+            if (chunk.Resource != null)
+                yield return chunk.Resource;
+
+            if (chunk.SubChunks != null)
+                foreach (var nested in FlattenResources(chunk.SubChunks))
+                    yield return nested;
+        }
     }
 
     private void ProcessResources(IReadOnlyCollection<BasicResource> resources, string outputDir)
@@ -200,6 +216,14 @@ public class ExportBundleCommand : BaseCommand
         var scenerySections = resources.OfType<ScenerySection>().ToList();
         var lightPacks = resources.OfType<LightPack>().ToList();
 
+        // Duplicate SceneryGuids across nodes are not expected (every real
+        // sample so far has been unique) - .First() rather than throwing
+        // keeps a bad/duplicate sample from crashing the whole export.
+        var worldAnimByGuid = resources.OfType<WorldAnimBank>()
+            .SelectMany(b => b.Nodes)
+            .GroupBy(n => n.SceneryGuid)
+            .ToDictionary(g => g.Key, g => g.First());
+
         var exportMode = ModelExportMode;
         if (scenerySections.Any() &&
             exportMode is ModelExportMode.ExportScenerySections or ModelExportMode.ExportSceneryInstances)
@@ -216,7 +240,8 @@ public class ExportBundleCommand : BaseCommand
                             $"{scenerySection.SectionNumber}.{sceneFileExtension}"), SceneFormat, texturePaths,
                         ExportLights
                             ? lightPacks.Where(lp => lp.ScenerySectionNumber == scenerySection.SectionNumber).ToList()
-                            : null);
+                            : null,
+                        worldAnimByGuid);
                 }
             }
             else
@@ -329,13 +354,15 @@ public class ExportBundleCommand : BaseCommand
         Dictionary<uint, Texture> textureInfos,
         ScenerySection scenerySection, string outputPath, SceneFormat sceneFormat,
         Dictionary<uint, string> texturePaths,
-        List<LightPack> lightPacks)
+        List<LightPack> lightPacks,
+        IReadOnlyDictionary<uint, WorldAnimNode> worldAnimByGuid = null)
     {
         Log.Information(
             "Exporting scenery section {ScenerySectionNumber} ({SceneryInfoCount} models, {SceneryInstanceCount} instances)",
             scenerySection.SectionNumber, scenerySection.Infos.Count, scenerySection.Instances.Count);
 
         var sceneNodes = new List<SceneExportNode>();
+        var animatedNodeCount = 0;
 
         foreach (var instance in scenerySection.Instances)
         {
@@ -350,8 +377,18 @@ public class ExportBundleCommand : BaseCommand
                 // Skip reflections and shadow maps
                 continue;
 
-            sceneNodes.Add(new SceneExportNode(solid, info.Name ?? solid.Name, instance.Transform));
+            WorldAnimNode animation = null;
+            if (instance.SceneryGuid != 0)
+                worldAnimByGuid?.TryGetValue(instance.SceneryGuid, out animation);
+            if (animation != null) animatedNodeCount++;
+
+            sceneNodes.Add(new SceneExportNode(solid, info.Name ?? solid.Name, instance.Transform,
+                animation: animation));
         }
+
+        if (animatedNodeCount > 0)
+            Log.Information("  {AnimatedCount} of {TotalCount} instance(s) in this section matched a world_anim node",
+                animatedNodeCount, sceneNodes.Count);
 
         var scene = new SceneExport(sceneNodes, $"ScenerySection_{scenerySection.SectionNumber}", objects);
         ExportScene(scene, outputPath, sceneFormat, textureInfos, texturePaths, lightPacks);
@@ -1487,20 +1524,30 @@ public class ExportBundleCommand : BaseCommand
 
         var visualScenes = new library_visual_scenes();
         var sceneNodes = new List<node>();
+        var animationList = new List<animation>();
 
         for (var idx = 0; idx < scene.Nodes.Count; idx++)
         {
             var node = scene.Nodes[idx];
             if (!node.IncludeInVisualScene) continue;
             var instanceMatrix = node.Transform;
+            var nodeId = $"scene_{scene.SceneName}_node_{idx}";
+
+            if (node.Animation != null)
+            {
+                var anim = BuildNodeAnimation(nodeId, node.Animation);
+                if (anim != null) animationList.Add(anim);
+            }
+
             sceneNodes.Add(new node
             {
                 name = node.Name,
-                id = $"scene_{scene.SceneName}_node_{idx}",
+                id = nodeId,
                 Items = new object[]
                 {
                 new matrix
                 {
+                    sid = "matrix",
                     Values = new double[]
                     {
                         instanceMatrix.M11, instanceMatrix.M21, instanceMatrix.M31, instanceMatrix.M41,
@@ -1728,16 +1775,12 @@ public class ExportBundleCommand : BaseCommand
         }
     };
 
-        collada.Items = new object[]
-        {
-        images,
-        materials,
-        effects,
-        geometries,
-        controllers,
-        lights,
-        visualScenes
-        };
+        var animations = new library_animations { animation = animationList.ToArray() };
+
+        var itemsList = new List<object> { images, materials, effects, geometries, controllers, lights };
+        if (animationList.Count > 0) itemsList.Add(animations);
+        itemsList.Add(visualScenes);
+        collada.Items = itemsList.ToArray();
         collada.scene = new COLLADAScene
         {
             instance_visual_scene = new InstanceWithExtra
@@ -1759,6 +1802,110 @@ public class ExportBundleCommand : BaseCommand
     private static string GetMaterialEffectId(SolidObject solid, int materialIndex)
     {
         return $"solid-{solid.Hash:X8}-mat{materialIndex}-fx";
+    }
+
+    /// <summary>
+    /// Builds a real COLLADA sampled-matrix animation for one node: authored
+    /// frames from world_anim_frames if present, otherwise a baked
+    /// synthetic loop for procedural constant-rotation nodes (see
+    /// WorldAnimNode.GetOrBakeFrames). Returns null for a static node with
+    /// nothing to animate. Matrix values use the same
+    /// M11,M21,M31,M41,... transpose already used for every other <matrix>
+    /// element in this exporter, so playback matches the static case.
+    /// </summary>
+    private static animation BuildNodeAnimation(string nodeId, WorldAnimNode animNode)
+    {
+        var frames = animNode.GetOrBakeFrames(out var fps);
+        if (frames.Count == 0) return null;
+
+        var animId = $"{nodeId}-anim";
+        var timeValues = new double[frames.Count];
+        var matrixValues = new double[frames.Count * 16];
+        var interpValues = new string[frames.Count];
+
+        for (var i = 0; i < frames.Count; i++)
+        {
+            timeValues[i] = i / fps;
+            var m = frames[i];
+            var baseIdx = i * 16;
+            matrixValues[baseIdx + 0] = m.M11; matrixValues[baseIdx + 1] = m.M21; matrixValues[baseIdx + 2] = m.M31; matrixValues[baseIdx + 3] = m.M41;
+            matrixValues[baseIdx + 4] = m.M12; matrixValues[baseIdx + 5] = m.M22; matrixValues[baseIdx + 6] = m.M32; matrixValues[baseIdx + 7] = m.M42;
+            matrixValues[baseIdx + 8] = m.M13; matrixValues[baseIdx + 9] = m.M23; matrixValues[baseIdx + 10] = m.M33; matrixValues[baseIdx + 11] = m.M43;
+            matrixValues[baseIdx + 12] = m.M14; matrixValues[baseIdx + 13] = m.M24; matrixValues[baseIdx + 14] = m.M34; matrixValues[baseIdx + 15] = m.M44;
+            interpValues[i] = "LINEAR";
+        }
+
+        var inputSource = new source
+        {
+            id = $"{animId}-input",
+            Item = new float_array { id = $"{animId}-input-array", count = (ulong)timeValues.Length, Values = timeValues },
+            technique_common = new sourceTechnique_common
+            {
+                accessor = new accessor
+                {
+                    source = $"#{animId}-input-array",
+                    count = (ulong)timeValues.Length,
+                    stride = 1,
+                    param = new[] { new param { name = "TIME", type = "float" } }
+                }
+            }
+        };
+
+        var outputSource = new source
+        {
+            id = $"{animId}-output",
+            Item = new float_array { id = $"{animId}-output-array", count = (ulong)matrixValues.Length, Values = matrixValues },
+            technique_common = new sourceTechnique_common
+            {
+                accessor = new accessor
+                {
+                    source = $"#{animId}-output-array",
+                    count = (ulong)frames.Count,
+                    stride = 16,
+                    param = new[] { new param { name = "TRANSFORM", type = "float4x4" } }
+                }
+            }
+        };
+
+        var interpSource = new source
+        {
+            id = $"{animId}-interpolation",
+            Item = new Name_array { id = $"{animId}-interpolation-array", count = (ulong)interpValues.Length, Values = interpValues },
+            technique_common = new sourceTechnique_common
+            {
+                accessor = new accessor
+                {
+                    source = $"#{animId}-interpolation-array",
+                    count = (ulong)interpValues.Length,
+                    stride = 1,
+                    param = new[] { new param { name = "INTERPOLATION", type = "name" } }
+                }
+            }
+        };
+
+        var animSampler = new sampler
+        {
+            id = $"{animId}-sampler",
+            input = new[]
+            {
+                new InputLocal { semantic = "INPUT", source = $"#{inputSource.id}" },
+                new InputLocal { semantic = "OUTPUT", source = $"#{outputSource.id}" },
+                new InputLocal { semantic = "INTERPOLATION", source = $"#{interpSource.id}" },
+            }
+        };
+
+        var animChannel = new channel
+        {
+            source = $"#{animSampler.id}",
+            target = $"{nodeId}/matrix"
+        };
+
+        return new animation
+        {
+            id = animId,
+            name = animId,
+            Items = new object[] { inputSource, outputSource, interpSource, animSampler, animChannel }
+        };
     }
 
     internal static string GetMaterialEffectName(SolidObjectMaterial material)
@@ -2435,16 +2582,22 @@ public class ExportBundleCommand : BaseCommand
 
 internal class SceneExportNode
 {
-    public SceneExportNode(SolidObject solidObject, string name, Matrix4x4 transform, bool includeInVisualScene = true)
+    public SceneExportNode(SolidObject solidObject, string name, Matrix4x4 transform, bool includeInVisualScene = true,
+        Common.WorldAnim.Data.WorldAnimNode animation = null)
     {
         SolidObject = solidObject;
         Name = name;
         Transform = transform;
         IncludeInVisualScene = includeInVisualScene;
+        Animation = animation;
     }
 
     public SolidObject SolidObject { get; }
     public string Name { get; }
     public Matrix4x4 Transform { get; }
     public bool IncludeInVisualScene { get; }
+
+    /// <summary>Non-null when this instance's SceneryGuid matched a decoded
+    /// world_anim node - see ExportScenerySection.</summary>
+    public Common.WorldAnim.Data.WorldAnimNode Animation { get; }
 }

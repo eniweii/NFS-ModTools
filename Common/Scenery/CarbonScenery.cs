@@ -143,6 +143,7 @@ namespace Common.Scenery
                 var internalInstance = BinaryUtil.ReadUnmanagedStruct<SceneryInstanceInternal>(br);
 
                 instance.InfoIndex = internalInstance.SceneryInfoNumber;
+                instance.SceneryGuid = internalInstance.SceneryGuid;
                 instance.Transform = Matrix4x4.Multiply(internalInstance.Rotation,
                     Matrix4x4.CreateTranslation(internalInstance.Position));
 

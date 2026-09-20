@@ -6,6 +6,7 @@ using Common.Geometry;
 using Common.Lights;
 using Common.Scenery;
 using Common.Textures;
+using Common.WorldAnim;
 
 namespace Common
 {
@@ -61,6 +62,8 @@ namespace Common
         }
 
         public List<Chunk> Chunks { get; } = new();
+
+        private readonly WorldAnimReader _worldAnimReader = new();
 
         protected override void ProcessOpen()
         {
@@ -147,6 +150,31 @@ namespace Common
                             throw new Exception($"Cannot process light pack chunk for game: {_game}");
                         break;
                     }
+                    case WorldAnimReader.HeaderChunkId:
+                    {
+                        _worldAnimReader.ReadHeader(Reader, chunk.Length);
+                        break;
+                    }
+                    case WorldAnimReader.CountsChunkId:
+                    {
+                        _worldAnimReader.ReadCounts(Reader, chunk.Length);
+                        break;
+                    }
+                    case WorldAnimReader.RtNodeChunkId:
+                    {
+                        _worldAnimReader.ReadNode(Reader, chunk.Length);
+                        break;
+                    }
+                    case WorldAnimReader.FramesChunkId:
+                    {
+                        _worldAnimReader.ReadFrames(Reader, chunk.Length);
+                        break;
+                    }
+                    case WorldAnimReader.EndPtrChunkId:
+                    {
+                        _worldAnimReader.ReadEndPtr(Reader, chunk.Length);
+                        break;
+                    }
                     default:
                         // If the chunk is a container chunk, read its sub-chunks.
                         if (chunk.IsParent)
@@ -165,6 +193,20 @@ namespace Common
                 Chunks.Add(cd);
 
                 SkipChunk(chunk);
+            }
+
+            var worldAnimBank = _worldAnimReader.Finish();
+            if (worldAnimBank.Nodes.Count > 0)
+            {
+                Chunks.Add(new Chunk
+                {
+                    Id = WorldAnimReader.HeaderChunkId,
+                    Size = 0,
+                    Data = Array.Empty<byte>(),
+                    Offset = -1,
+                    SubChunks = new List<Chunk>(),
+                    Resource = worldAnimBank,
+                });
             }
         }
 
