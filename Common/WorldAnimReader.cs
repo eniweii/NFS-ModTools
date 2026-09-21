@@ -150,19 +150,36 @@ namespace Common.WorldAnim
 
         public void ReadFrames(BinaryReader br, uint chunkSize)
         {
-            // UNVERIFIED - no real sample with KeyFrameCount > 0 has been
-            // seen yet in this project. Implemented per the doc's proposed
-            // shape (contiguous 64-byte float4x4 matrices) as the best
-            // available guess; treat every value here as unconfirmed until
-            // checked against a real frames chunk.
+            // UNVERIFIED - no real sample with KeyFrameCount > 0 had been
+            // hex-checked when this was first written. First real-world use
+            // showed corrupted scale on authored (keyframed) objects while
+            // baked (procedural) ones exported correctly. Refuse to attach
+            // frames on any size mismatch rather than exporting a partial
+            // or misaligned animation - a static object is a safe
+            // fallback, a corrupted animated one is not.
             if (_pendingFramesNode == null) return;
 
-            var expectedCount = _pendingFramesNode.KeyFrameCount;
-            var available = chunkSize / 64;
-            var count = (int)Math.Min(expectedCount, available);
+            var node = _pendingFramesNode;
+            _pendingFramesNode = null;
 
-            var frames = new System.Collections.Generic.List<Matrix4x4>((int)count);
-            for (var i = 0; i < count; i++)
+            var expectedCount = node.KeyFrameCount;
+            if (expectedCount == 0) return;
+
+            const ulong bytesPerFrame = 64;
+            var expectedBytes = (ulong)expectedCount * bytesPerFrame;
+
+            if (expectedCount > int.MaxValue || expectedBytes != chunkSize)
+            {
+                Console.Error.WriteLine(
+                    $"[WorldAnimReader] world_anim_frames for node key=0x{node.Key:X8} (SceneryGuid=0x{node.SceneryGuid:X8}): " +
+                    $"chunkSize={chunkSize} but KeyFrameCount={expectedCount} implies exactly {expectedBytes} bytes at " +
+                    "64 bytes/frame - mismatch means the 64-byte-per-frame layout is probably wrong here. " +
+                    "Leaving this node static rather than exporting a bad animation.");
+                return;
+            }
+
+            var frames = new System.Collections.Generic.List<Matrix4x4>((int)expectedCount);
+            for (var i = 0; i < expectedCount; i++)
             {
                 var m = new float[16];
                 for (var j = 0; j < 16; j++) m[j] = br.ReadSingle();
@@ -173,8 +190,7 @@ namespace Common.WorldAnim
                     m[12], m[13], m[14], m[15]));
             }
 
-            _pendingFramesNode.Frames = frames;
-            _pendingFramesNode = null;
+            node.Frames = frames;
         }
 
         public void ReadEndPtr(BinaryReader br, uint chunkSize)

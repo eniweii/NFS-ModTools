@@ -60,12 +60,26 @@ namespace Common.WorldAnim.Data
         ///    real sample seen so far has exactly one nonzero axis, so this
         ///    hasn't actually been exercised.
         /// </summary>
+        private IReadOnlyList<Matrix4x4> _diagnosedFrames;
+
         public IReadOnlyList<Matrix4x4> GetOrBakeFrames(out float framesPerSecond)
         {
             framesPerSecond = BaseFrameRate;
 
             if (KeyFrameCount > 0 && Frames is { Count: > 0 })
-                return Frames;
+            {
+                // DIAGNOSTIC ONLY - not a fix. We don't yet know whether the
+                // scale instability seen on export is (a) a decomposition-
+                // branch artifact on otherwise-constant scale (safe to
+                // normalize away) or (b) genuine intentional scale change
+                // over the clip (which a naive "hold frame 0's scale"
+                // normalization would silently destroy). Logging every raw
+                // frame's decomposed scale/determinant so that decision is
+                // made from real numbers, not a guess. Frames are returned
+                // UNMODIFIED - no normalization applied yet.
+                _diagnosedFrames ??= LogAndReturnRawFrames(Frames, Key, SceneryGuid);
+                return _diagnosedFrames;
+            }
 
             var axisIndex = Array.FindIndex(RotationSpeed, s => s != 0);
             if (axisIndex < 0)
@@ -96,10 +110,26 @@ namespace Common.WorldAnim.Data
 
             return baked;
         }
+
+        private static IReadOnlyList<Matrix4x4> LogAndReturnRawFrames(IReadOnlyList<Matrix4x4> source, uint key, uint sceneryGuid)
+        {
+            for (var i = 0; i < source.Count; i++)
+            {
+                var frame = source[i];
+                var det = frame.GetDeterminant();
+                var decomposed = Matrix4x4.Decompose(frame, out var scale, out _, out _);
+                Console.Error.WriteLine(
+                    $"[WorldAnimNode] key=0x{key:X8} guid=0x{sceneryGuid:X8} frame {i}/{source.Count}: " +
+                    $"det={det:F6} decompose_ok={decomposed} " +
+                    $"scale=({scale.X:F6},{scale.Y:F6},{scale.Z:F6})");
+            }
+            return source;
+        }
     }
 
     public class WorldAnimBank : BasicResource
     {
         public List<WorldAnimNode> Nodes { get; } = new();
+
     }
 }
