@@ -69,8 +69,81 @@ namespace Common.WorldAnim
 
         private readonly WorldAnimBank _bank = new();
         private WorldAnimNode _pendingFramesNode;
+        private int _currentTreeStart;
 
-        public WorldAnimBank Finish() => _bank;
+        public WorldAnimBank Finish()
+        {
+            ResolveLibraryAndParentAnimations(_bank.Nodes);
+            return _bank;
+        }
+
+        /// <summary>
+        /// Confirmed via the real reversed loader, MaxHwoy/Hyperlinked's
+        /// hyperlib/assets/world_anims.cpp (world_anim::loader): a
+        /// UseLibraryAnim node's own RotationSpeed/InitialAngle are NOT used
+        /// - they get overwritten in place with the matched library node's
+        /// values before the tree is handed off. UseParentAnim does the same
+        /// copy from tree->nodes[ParentIndex], gated on UseParentFrames.
+        /// Without this, procedural nodes that borrow their motion (rather
+        /// than owning it) bake using placeholder/zero on-disk values.
+        /// </summary>
+        private static void ResolveLibraryAndParentAnimations(List<WorldAnimNode> nodes)
+        {
+            // find_library_tree matches a library tree's first node's Key
+            // against the borrowing node's SolidKeys[0] or [1]. We don't
+            // track library-tree grouping separately, so approximate with a
+            // global Key lookup, preferring an IsLibraryAnim source on
+            // collision (mirrors the source's node being the tree's own
+            // nodes[0], which for a library tree is IsLibraryAnim).
+            var byKey = new Dictionary<uint, WorldAnimNode>();
+            foreach (var n in nodes)
+            {
+                if (!byKey.TryGetValue(n.Key, out var existing) || (!existing.IsLibraryAnim && n.IsLibraryAnim))
+                    byKey[n.Key] = n;
+            }
+
+            foreach (var node in nodes)
+            {
+                if (node.UseLibraryAnim)
+                {
+                    WorldAnimNode source = null;
+                    if (node.SolidKeys.Length > 0 && node.SolidKeys[0] != 0)
+                        byKey.TryGetValue(node.SolidKeys[0], out source);
+                    if (source == null && node.SolidKeys.Length > 1 && node.SolidKeys[1] != 0)
+                        byKey.TryGetValue(node.SolidKeys[1], out source);
+
+                    if (source != null)
+                    {
+                        node.RotationSpeed = (short[])source.RotationSpeed.Clone();
+                        node.InitialAngle = source.InitialAngle;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            $"[WorldAnimReader] UseLibraryAnim node key=0x{node.Key:X8}: no matching " +
+                            $"library node (SolidKeys[0]=0x{node.SolidKeys[0]:X8}, [1]=0x{node.SolidKeys[1]:X8}); " +
+                            "leaving its own (likely placeholder) RotationSpeed/InitialAngle.");
+                    }
+                }
+                else if (node.UseParentAnim && node.UseParentFrames)
+                {
+                    var parentIndex = node.TreeStartIndex + node.ParentIndex;
+                    if (node.ParentIndex >= 0 && parentIndex < nodes.Count)
+                    {
+                        var parent = nodes[parentIndex];
+                        node.RotationSpeed = (short[])parent.RotationSpeed.Clone();
+                        node.InitialAngle = parent.InitialAngle;
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            $"[WorldAnimReader] UseParentAnim node key=0x{node.Key:X8}: invalid " +
+                            $"ParentIndex={node.ParentIndex} (TreeStartIndex={node.TreeStartIndex}); " +
+                            "leaving its own RotationSpeed/InitialAngle.");
+                    }
+                }
+            }
+        }
 
         public void ReadHeader(BinaryReader br, uint chunkSize)
         {
@@ -97,6 +170,13 @@ namespace Common.WorldAnim
 
             // Kept as a future cross-check when tree/bank grouping is rebuilt.
             _ = nodeCount;
+
+            // A world_anim_counts chunk marks the start of one tree's worth
+            // of consecutively-read rtnodes (matches world_anim::loader's
+            // tree->node_count grouping). Record where in the flat Nodes
+            // list this tree begins so ParentIndex (local to its own tree)
+            // can later be resolved to an absolute index.
+            _currentTreeStart = _bank.Nodes.Count;
         }
 
         public void ReadNode(BinaryReader br, uint chunkSize)
@@ -133,6 +213,8 @@ namespace Common.WorldAnim
                 IsLibraryAnim = (raw.Flags & 0x01) != 0,
                 UseLibraryAnim = (raw.Flags & 0x02) != 0,
                 UseParentAnim = (raw.Flags & 0x04) != 0,
+                UseParentFrames = raw.UseParentFrames != 0,
+                TreeStartIndex = _currentTreeStart,
 
                 SolidKeys = new[]
                 {

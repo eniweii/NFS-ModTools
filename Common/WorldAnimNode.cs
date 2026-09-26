@@ -18,6 +18,17 @@ namespace Common.WorldAnim.Data
         public bool IsLibraryAnim { get; set; }
         public bool UseLibraryAnim { get; set; }
         public bool UseParentAnim { get; set; }
+        public bool UseParentFrames { get; set; }
+
+        /// <summary>
+        /// Index of this node's tree within the flat Nodes list (i.e. the
+        /// list index of tree element 0), so ParentIndex - which the real
+        /// engine resolves as tree->nodes[ParentIndex], local to this node's
+        /// own tree - can be turned into an absolute index. Set by
+        /// WorldAnimReader while reading; not populated from the file itself.
+        /// </summary>
+        public int TreeStartIndex { get; set; }
+
         public uint[] SolidKeys { get; set; } = new uint[3];
         public uint SmackableKey { get; set; }
         public uint SceneryGuid { get; set; }
@@ -44,18 +55,37 @@ namespace Common.WorldAnim.Data
         private const float BaseFrameRate = 30.0f; // confirmed from MW source (WorldAnimCtrl)
 
         /// <summary>
+        /// Real hold time at each swing extreme before reversing, so the
+        /// direction change doesn't judder. Confirmed to be real (matches
+        /// CWorldAnimCtrl's MasterDelayTime/LocalDelayTime pause-before-loop
+        /// behavior, dbalatoni13/nfsmw WorldAnimCtrl.cpp) but the exact
+        /// duration is a visual approximation from real gameplay footage,
+        /// not a decoded value - isolated here so it's a one-line tune.
+        /// </summary>
+        private const float PauseSeconds = 0.1f;
+
+        /// <summary>
         /// Returns real authored frames if present, otherwise bakes synthetic
-        /// keyframes for a procedural constant-rotation node (section 2400
-        /// pattern: no keyframes, angle = initial_angle + rotation_speed*time
-        /// around whichever local axis has a nonzero rotation_speed).
+        /// keyframes for a procedural node (section 2400 pattern: no
+        /// keyframes, driven by RotationSpeed/InitialAngle around whichever
+        /// local axis has a nonzero RotationSpeed).
         ///
-        /// ASSUMPTIONS not yet visually verified in Blender:
+        /// Confirmed via real gameplay footage (searchlight, CarLotFlags)
+        /// cross-checked against real data:
+        ///  - InitialAngle == 0: unbounded continuous rotation (0->360 wrap).
+        ///  - InitialAngle != 0: bounded swing 0 -> +angle -> 0 -> -angle ->
+        ///    0 -> ..., eased like a sine wave (this engine's own native
+        ///    idiom for sway - see rain.cpp's CreateWindRotMatrix,
+        ///    sway = sin(...) * swayMax - though not the identical code
+        ///    path), with a PauseSeconds hold at each +-angle extreme.
+        ///
+        /// Still an assumption, not yet visually verified in Blender:
         ///  - rotation composes as (local spin) * (static transform), i.e.
         ///    the object spins around its own local axis before being placed
         ///    - matches row-vector convention already used elsewhere in this
         ///    codebase (v' = v * M), but the resulting spin DIRECTION/handedness
         ///    has not been checked against real gameplay footage.
-        ///  - if more than one axis has a nonzero rotation_speed, only the
+        ///  - if more than one axis has a nonzero RotationSpeed, only the
         ///    first nonzero one found (X, then Y, then Z) is used - every
         ///    real sample seen so far has exactly one nonzero axis, so this
         ///    hasn't actually been exercised.
@@ -85,7 +115,7 @@ namespace Common.WorldAnim.Data
             if (axisIndex < 0)
                 return Array.Empty<Matrix4x4>(); // static node - nothing to animate
 
-            var degreesPerSecond = RotationSpeed[axisIndex] * TimeScaleFactor;
+            var degreesPerSecond = Math.Abs(RotationSpeed[axisIndex] * TimeScaleFactor);
             if (degreesPerSecond == 0) return Array.Empty<Matrix4x4>();
 
             var axis = axisIndex switch
@@ -95,20 +125,74 @@ namespace Common.WorldAnim.Data
                 _ => Vector3.UnitZ,
             };
 
-            var periodSeconds = 360.0 / Math.Abs(degreesPerSecond);
-            var frameCount = Math.Max(2, (int)Math.Round(periodSeconds * BaseFrameRate));
+            return InitialAngle == 0
+                ? BakeFullRotation(axis, degreesPerSecond, framesPerSecond)
+                : BakeBoundedSwing(axis, degreesPerSecond, Math.Abs((float)InitialAngle), framesPerSecond);
+        }
+
+        private List<Matrix4x4> BakeFullRotation(Vector3 axis, float degreesPerSecond, float framesPerSecond)
+        {
+            var periodSeconds = 360.0 / degreesPerSecond;
+            var frameCount = Math.Max(2, (int)Math.Round(periodSeconds * framesPerSecond));
 
             var baked = new List<Matrix4x4>(frameCount);
             for (var i = 0; i < frameCount; i++)
             {
-                var timeSeconds = i / BaseFrameRate;
-                var angleDegrees = InitialAngle + degreesPerSecond * timeSeconds;
+                var timeSeconds = i / framesPerSecond;
+                var angleDegrees = degreesPerSecond * timeSeconds;
                 var angleRadians = angleDegrees * (MathF.PI / 180f);
                 var spin = Matrix4x4.CreateFromAxisAngle(axis, angleRadians);
                 baked.Add(spin * Transform);
             }
 
             return baked;
+        }
+
+        private List<Matrix4x4> BakeBoundedSwing(Vector3 axis, float degreesPerSecond, float amplitudeDegrees, float framesPerSecond)
+        {
+            // RotationSpeed is treated as the swing's peak (zero-crossing)
+            // angular velocity of a sine wave: amplitude * omega = degreesPerSecond.
+            var omega = degreesPerSecond / amplitudeDegrees; // "radians"/sec in this angle-domain sine
+            var quarterPeriodSeconds = (MathF.PI / 2f) / omega;
+            var totalCycleSeconds = 4f * quarterPeriodSeconds + 2f * PauseSeconds;
+
+            var frameCount = Math.Max(4, (int)Math.Round(totalCycleSeconds * framesPerSecond));
+            var baked = new List<Matrix4x4>(frameCount);
+
+            for (var i = 0; i < frameCount; i++)
+            {
+                var realTime = i / framesPerSecond;
+                var phaseTime = RealTimeToPhaseTime(realTime, quarterPeriodSeconds, PauseSeconds);
+                var angleDegrees = amplitudeDegrees * MathF.Sin(omega * phaseTime);
+                var angleRadians = angleDegrees * (MathF.PI / 180f);
+                var spin = Matrix4x4.CreateFromAxisAngle(axis, angleRadians);
+                baked.Add(spin * Transform);
+            }
+
+            return baked;
+        }
+
+        /// <summary>
+        /// Maps elapsed real time within one swing cycle to the equivalent
+        /// "phase" time fed into sin(omega * phase) - identical to real time
+        /// except phase is frozen for PauseSeconds right after each +-angle
+        /// extreme (end of the 1st and 3rd quarter-period), producing the
+        /// hold-then-resume behavior confirmed from real footage.
+        /// </summary>
+        private static float RealTimeToPhaseTime(float t, float quarterPeriod, float pause)
+        {
+            var t1 = quarterPeriod;           // reach +angle
+            var t2 = t1 + pause;              // pause at +angle ends
+            var t3 = t2 + quarterPeriod;      // back through 0
+            var t4 = t3 + quarterPeriod;      // reach -angle
+            var t5 = t4 + pause;              // pause at -angle ends
+
+            if (t <= t1) return t;
+            if (t <= t2) return quarterPeriod;
+            if (t <= t3) return quarterPeriod + (t - t2);
+            if (t <= t4) return 2 * quarterPeriod + (t - t3);
+            if (t <= t5) return 3 * quarterPeriod;
+            return 3 * quarterPeriod + (t - t5);
         }
 
         private static IReadOnlyList<Matrix4x4> LogAndReturnRawFrames(IReadOnlyList<Matrix4x4> source, uint key, uint sceneryGuid)

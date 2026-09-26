@@ -364,8 +364,15 @@ public class ExportBundleCommand : BaseCommand
         var sceneNodes = new List<SceneExportNode>();
         var animatedNodeCount = 0;
 
-        foreach (var instance in scenerySection.Instances)
+        // rawInstanceIndex increments for EVERY instance in this section,
+        // BEFORE any skip below - this is what makes it match the real
+        // on-disk SceneryInstance array position (and therefore
+        // SceneryOverrideInfo.InstanceNumber / nfs_stream_scenery's
+        // instance_number), unlike sceneNodes.Count/a filtered-list
+        // position, which does not.
+        for (var rawInstanceIndex = 0; rawInstanceIndex < scenerySection.Instances.Count; rawInstanceIndex++)
         {
+            var instance = scenerySection.Instances[rawInstanceIndex];
             var info = scenerySection.Infos[instance.InfoIndex];
 
             if (!objects.TryGetValue(info.SolidKey, out var solid))
@@ -383,7 +390,7 @@ public class ExportBundleCommand : BaseCommand
             if (animation != null) animatedNodeCount++;
 
             sceneNodes.Add(new SceneExportNode(solid, info.Name ?? solid.Name, instance.Transform,
-                animation: animation));
+                rawInstanceIndex: rawInstanceIndex, animation: animation));
         }
 
         if (animatedNodeCount > 0)
@@ -1531,7 +1538,15 @@ public class ExportBundleCommand : BaseCommand
             var node = scene.Nodes[idx];
             if (!node.IncludeInVisualScene) continue;
             var instanceMatrix = node.Transform;
-            var nodeId = $"scene_{scene.SceneName}_node_{idx}";
+            // Prefer the real on-disk instance index (set by
+            // ExportScenerySection) over this loop's own filtered-list
+            // position, so exported node ids match
+            // SceneryOverrideInfo.InstanceNumber / nfs_stream_scenery's
+            // instance_number for cross-referencing overrides/groups.
+            // Falls back to idx for every other SceneExportNode caller
+            // (generic solid-list export, morph targets), which have no
+            // real instance index at all - unchanged behavior for those.
+            var nodeId = $"scene_{scene.SceneName}_node_{node.RawInstanceIndex ?? idx}";
 
             if (node.Animation != null)
             {
@@ -2583,12 +2598,13 @@ public class ExportBundleCommand : BaseCommand
 internal class SceneExportNode
 {
     public SceneExportNode(SolidObject solidObject, string name, Matrix4x4 transform, bool includeInVisualScene = true,
-        Common.WorldAnim.Data.WorldAnimNode animation = null)
+        int? rawInstanceIndex = null, Common.WorldAnim.Data.WorldAnimNode animation = null)
     {
         SolidObject = solidObject;
         Name = name;
         Transform = transform;
         IncludeInVisualScene = includeInVisualScene;
+        RawInstanceIndex = rawInstanceIndex;
         Animation = animation;
     }
 
@@ -2596,6 +2612,15 @@ internal class SceneExportNode
     public string Name { get; }
     public Matrix4x4 Transform { get; }
     public bool IncludeInVisualScene { get; }
+
+    /// <summary>The real on-disk SceneryInstance array position (set only by
+    /// ExportScenerySection - null for every other SceneExportNode caller,
+    /// which have no such concept). Used for the exported <node> id instead
+    /// of this node's position in the filtered per-file node list, so it
+    /// matches SceneryOverrideInfo.InstanceNumber / nfs_stream_scenery's
+    /// instance_number for cross-referencing overrides/groups. Falls back
+    /// to the filtered-list position when null - see ExportSceneCollada.</summary>
+    public int? RawInstanceIndex { get; }
 
     /// <summary>Non-null when this instance's SceneryGuid matched a decoded
     /// world_anim node - see ExportScenerySection.</summary>
