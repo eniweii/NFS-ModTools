@@ -221,6 +221,13 @@ public class ExportBundleCommand : BaseCommand
         var scenerySections = resources.OfType<ScenerySection>().ToList();
         var lightPacks = resources.OfType<LightPack>().ToList();
 
+        // The material dictionary is filled while the scenes are exported (ExportSceneCollada)
+        // and written once at the end of this method. It is static, so clear it first and give
+        // it the texture animations (frame swap) that were read from the texture_pack_anim chunk.
+        CarbonMaterialDictionary.Reset();
+        CarbonMaterialDictionary.RegisterAnimations(
+            resources.OfType<TextureAnimationBank>().SelectMany(b => b.Animations));
+
         // Duplicate SceneryGuids across nodes are not expected (every real
         // sample so far has been unique) - .First() rather than throwing
         // keeps a bad/duplicate sample from crashing the whole export.
@@ -356,6 +363,12 @@ public class ExportBundleCommand : BaseCommand
                 }
             }
         }
+
+        // null when no Carbon material was added (other games, or nothing exported)
+        var dictionarySummary =
+            CarbonMaterialDictionary.Write(Path.Combine(outputDir, "carbon_material_dictionary.json"));
+        if (dictionarySummary != null)
+            Log.Information("Wrote carbon_material_dictionary.json: {Summary}", dictionarySummary);
     }
 
     private static void ExportScenerySection(IReadOnlyDictionary<uint, SolidObject> objects,
@@ -1459,6 +1472,11 @@ public class ExportBundleCommand : BaseCommand
                     usageLog.AppendLine();
                     File.AppendAllText("materialtextureusage.txt", usageLog.ToString());
                 }*/
+
+                if (material is CarbonMaterial carbonMaterial)
+                    CarbonMaterialDictionary.Add(exportName, solid.Name, carbonMaterial,
+                        GetMaterialEffectName(carbonMaterial),
+                        hash => textureInfos.TryGetValue(hash, out var t) ? t : null);
 
                 var diffuseTextureId = ResolveDiffuseHash(material);
                 var effectIdBase = GetMaterialEffectId(solid, materialIndex);
