@@ -175,6 +175,13 @@ namespace Common
                         _worldAnimReader.ReadEndPtr(Reader, chunk.Length);
                         break;
                     }
+                    case TextureAnimationReader.PackChunkId:
+                    {
+                        var animBank = new Common.Textures.Data.TextureAnimationBank();
+                        TextureAnimationReader.ReadContainer(Reader, chunk.Length, animBank.Animations);
+                        cd.Resource = animBank;
+                        break;
+                    }
                     default:
                         // If the chunk is a container chunk, read its sub-chunks.
                         if (chunk.IsParent)

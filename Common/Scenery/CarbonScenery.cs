@@ -124,7 +124,14 @@ namespace Common.Scenery
                 _scenerySection.Infos.Add(new SceneryInfo
                 {
                     Name = info.Name,
-                    SolidKey = info.SolidMeshKey1
+                    SolidKey = info.SolidMeshKey1,
+                    SolidKeys = new[]
+                    {
+                        info.SolidMeshKey1, info.SolidMeshKey2, info.SolidMeshKey3, info.SolidMeshKey4
+                    },
+                    Radius = info.Radius,
+                    HierarchyNameHash = info.HierarchyNameHash,
+                    Flags = info.Flags
                 });
             }
             //Debug.Log($"Loaded {_scenerySection.SceneryInfos.Count} scenery definitions for ScenerySection {_scenerySection.SectionNumber}");
@@ -144,6 +151,11 @@ namespace Common.Scenery
 
                 instance.InfoIndex = internalInstance.SceneryInfoNumber;
                 instance.SceneryGuid = internalInstance.SceneryGuid;
+                instance.Flags = (SceneryInstanceFlags)internalInstance.InstanceFlags;
+                instance.BBoxMin = internalInstance.BBoxMin;
+                instance.BBoxMax = internalInstance.BBoxMax;
+                // PrecullerInfoIndex and LightingContextNumber are read but thrown away on purpose
+                // (the preculler is not used, LightingContextNumber is -1 for every instance)
                 instance.Transform = Matrix4x4.Multiply(internalInstance.Rotation,
                     Matrix4x4.CreateTranslation(internalInstance.Position));
 

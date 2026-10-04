@@ -67,9 +67,21 @@ namespace Common.Scenery.Data
         public uint SolidKey { get; set; }
         public bool IsDeinstanced { get; set; }
 
-        // Per-model (not per-instance) flags - real field name/meaning not
-        // yet decoded, only the per-instance enum above has been. Kept raw
-        // until that's done.
+        // All four LOD solid keys (hyperlinked model_lod a-d). SolidKey above
+        // is always the first one. 0 means that LOD slot is empty.
+        public uint[] SolidKeys { get; set; }
+
+        // Bounding radius. The game picks a LOD from this and the camera
+        // distance (pixel size), so there is no draw distance stored.
+        public float Radius { get; set; }
+
+        // Key of the animation hierarchy, 0 when the model has none.
+        public uint HierarchyNameHash { get; set; }
+
+        // Per-model (not per-instance) flags - hyperlinked has no enum for
+        // these, it only uses them as a runtime cache (bit 0 = markers
+        // computed, bits 1-4 = that LOD has position markers), so on disk
+        // they are probably 0. Kept raw until a real file confirms it.
         public uint Flags { get; set; }
     }
 
@@ -79,6 +91,8 @@ namespace Common.Scenery.Data
         public Matrix4x4 Transform { get; set; }
         public SceneryInstanceFlags Flags { get; set; }
         public uint SceneryGuid { get; set; }
+        public Vector3 BBoxMin { get; set; }
+        public Vector3 BBoxMax { get; set; }
     }
     
     public class ScenerySection : BasicResource

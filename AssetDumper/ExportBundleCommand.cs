@@ -66,6 +66,11 @@ public class ExportBundleCommand : BaseCommand
             "When enabled, lights will be exported to the COLLADA scene. ONLY VALID WITH ExportScenerySections.")]
     public bool ExportLights { get; [UsedImplicitly] set; }
 
+    [Option("export-lods",
+        HelpText =
+            "When enabled, the other LODs of every scenery model are exported to the COLLADA scene too. ONLY VALID WITH ExportScenerySections.")]
+    public bool ExportLods { get; [UsedImplicitly] set; }
+
     [Option("scene-format", HelpText = "The format (Collada or Fbx) to export scenes in")]
     public SceneFormat SceneFormat { get; [UsedImplicitly] set; } = SceneFormat.Collada;
 
@@ -241,8 +246,11 @@ public class ExportBundleCommand : BaseCommand
                         ExportLights
                             ? lightPacks.Where(lp => lp.ScenerySectionNumber == scenerySection.SectionNumber).ToList()
                             : null,
-                        worldAnimByGuid);
+                        worldAnimByGuid, ExportLods);
                 }
+
+                SceneryManifestWriter.Write(outputDir, scenerySections);
+                Log.Information("Wrote scenery_infos.tsv and scenery_instances.tsv");
             }
             else
             {
@@ -355,7 +363,7 @@ public class ExportBundleCommand : BaseCommand
         ScenerySection scenerySection, string outputPath, SceneFormat sceneFormat,
         Dictionary<uint, string> texturePaths,
         List<LightPack> lightPacks,
-        IReadOnlyDictionary<uint, WorldAnimNode> worldAnimByGuid = null)
+        IReadOnlyDictionary<uint, WorldAnimNode> worldAnimByGuid = null, bool exportLods = false)
     {
         Log.Information(
             "Exporting scenery section {ScenerySectionNumber} ({SceneryInfoCount} models, {SceneryInstanceCount} instances)",
@@ -391,6 +399,31 @@ public class ExportBundleCommand : BaseCommand
 
             sceneNodes.Add(new SceneExportNode(solid, info.Name ?? solid.Name, instance.Transform,
                 rawInstanceIndex: rawInstanceIndex, animation: animation));
+
+            if (!exportLods || info.SolidKeys == null)
+                continue;
+
+            // SolidKeys[0] is the solid exported above. One solid can fill
+            // more than one LOD slot (slots A and B can both point at the
+            // same _1B solid), so every different solid is exported once.
+            var seenLodKeys = new HashSet<uint> { 0, info.SolidKey };
+            for (var lodSlot = 1; lodSlot < info.SolidKeys.Length; lodSlot++)
+            {
+                var lodKey = info.SolidKeys[lodSlot];
+                if (!seenLodKeys.Add(lodKey) || !objects.TryGetValue(lodKey, out var lodSolid))
+                    continue;
+
+                var lodSolidName = lodSolid.Name.ToUpperInvariant();
+                if (lodSolidName.StartsWith("RFL_") || lodSolidName.StartsWith("SHD_") ||
+                    lodSolidName.StartsWith("SHADOW"))
+                    // Skip reflections and shadow maps
+                    continue;
+
+                // Same transform and same rawInstanceIndex as the base node,
+                // the lodSlot keeps the exported node id different.
+                sceneNodes.Add(new SceneExportNode(lodSolid, lodSolid.Name, instance.Transform,
+                    rawInstanceIndex: rawInstanceIndex, lodSlot: lodSlot));
+            }
         }
 
         if (animatedNodeCount > 0)
@@ -1404,7 +1437,7 @@ public class ExportBundleCommand : BaseCommand
                 /*log.AppendLine();
                 File.AppendAllText("material_texture_dump.txt", log.ToString());*/
 
-                {
+                /*{
                     var usageLog = new StringBuilder();
                     usageLog.AppendLine($"{solid.Name} | {exportName}");
 
@@ -1425,14 +1458,7 @@ public class ExportBundleCommand : BaseCommand
 
                     usageLog.AppendLine();
                     File.AppendAllText("materialtextureusage.txt", usageLog.ToString());
-                }
-
-                if (material is CarbonMaterial carbonMaterial)
-                {
-                    var manifestEntry = CarbonMaterialManifestBuilder.BuildEntry(solid.Name, exportName, carbonMaterial,
-                        hash => textureInfos.TryGetValue(hash, out var t) ? t : null);
-                    CarbonMaterialManifestBuilder.Append("carbon_materials.jsonl", manifestEntry);
-                }
+                }*/
 
                 var diffuseTextureId = ResolveDiffuseHash(material);
                 var effectIdBase = GetMaterialEffectId(solid, materialIndex);
@@ -1546,7 +1572,10 @@ public class ExportBundleCommand : BaseCommand
             // Falls back to idx for every other SceneExportNode caller
             // (generic solid-list export, morph targets), which have no
             // real instance index at all - unchanged behavior for those.
-            var nodeId = $"scene_{scene.SceneName}_node_{node.RawInstanceIndex ?? idx}";
+            // Extra LOD nodes share the RawInstanceIndex of their base node,
+            // so they get a "_lod{slot}" ending to keep the id unique.
+            var nodeId = $"scene_{scene.SceneName}_node_{node.RawInstanceIndex ?? idx}" +
+                         (node.LodSlot > 0 ? $"_lod{node.LodSlot}" : "");
 
             if (node.Animation != null)
             {
@@ -2155,7 +2184,7 @@ public class ExportBundleCommand : BaseCommand
             log.AppendLine();
             File.AppendAllText("uv_export_dump.log", log.ToString());
         }
-        LogUVDiagnostics(solidObject.Name, materialNames, solidObject);
+        //LogUVDiagnostics(solidObject.Name, materialNames, solidObject);
 
         var positionsName = $"{geometryId}_positions";
         var positionSrcId = $"{positionsName}_src";
@@ -2598,7 +2627,7 @@ public class ExportBundleCommand : BaseCommand
 internal class SceneExportNode
 {
     public SceneExportNode(SolidObject solidObject, string name, Matrix4x4 transform, bool includeInVisualScene = true,
-        int? rawInstanceIndex = null, Common.WorldAnim.Data.WorldAnimNode animation = null)
+        int? rawInstanceIndex = null, Common.WorldAnim.Data.WorldAnimNode animation = null, int lodSlot = 0)
     {
         SolidObject = solidObject;
         Name = name;
@@ -2606,6 +2635,7 @@ internal class SceneExportNode
         IncludeInVisualScene = includeInVisualScene;
         RawInstanceIndex = rawInstanceIndex;
         Animation = animation;
+        LodSlot = lodSlot;
     }
 
     public SolidObject SolidObject { get; }
@@ -2625,4 +2655,10 @@ internal class SceneExportNode
     /// <summary>Non-null when this instance's SceneryGuid matched a decoded
     /// world_anim node - see ExportScenerySection.</summary>
     public Common.WorldAnim.Data.WorldAnimNode Animation { get; }
+
+    /// <summary>0 for the normal node of an instance. 1-3 for the extra LOD
+    /// nodes that ExportScenerySection adds when LOD export is on (the
+    /// SceneryInfo.SolidKeys position of that LOD). Only used to keep the
+    /// exported node id unique - see ExportSceneCollada.</summary>
+    public int LodSlot { get; }
 }

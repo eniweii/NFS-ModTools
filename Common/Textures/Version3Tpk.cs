@@ -50,7 +50,10 @@ namespace Common.Textures
 
                 if ((chunkId & 0x80000000) == 0x80000000)
                 {
-                    ReadChunks(br, chunkSize);
+                    if (chunkId == TextureAnimationReader.PackChunkId)
+                        TextureAnimationReader.ReadContainer(br, chunkSize, _texturePack.Animations);
+                    else
+                        ReadChunks(br, chunkSize);
                 }
                 else
                 {
@@ -181,6 +184,11 @@ namespace Common.Textures
                 realTexture.RenderFlags = (TextureRenderFlags)texture.Flags;
                 realTexture.ScrollSpeedS = texture.ScrollSpeedS;
                 realTexture.ScrollSpeedT = texture.ScrollSpeedT;
+                realTexture.ScrollTimeStep = texture.ScrollTimeStep;
+                realTexture.OffsetS = texture.OffsetS;
+                realTexture.OffsetT = texture.OffsetT;
+                realTexture.ScaleS = texture.ScaleS;
+                realTexture.ScaleT = texture.ScaleT;
             }
 
             _texturePack.Textures.Add(realTexture);

@@ -87,6 +87,11 @@ namespace Common.Textures.Data
         public TextureRenderFlags? RenderFlags { get; set; }
         public short? ScrollSpeedS { get; set; }
         public short? ScrollSpeedT { get; set; }
+        public short? ScrollTimeStep { get; set; }
+        public short? OffsetS { get; set; }
+        public short? OffsetT { get; set; }
+        public short? ScaleS { get; set; }
+        public short? ScaleT { get; set; }
 
         /// <summary>
         /// Writes DDS data to the given stream.
@@ -143,6 +148,9 @@ namespace Common.Textures.Data
         public uint Version { get; set; }
 
         public List<Texture> Textures { get; set; } = new List<Texture>();
+
+        /// <summary>Texture frame-swap playlists (texture_pack_anim). Filled by Version3Tpk only.</summary>
+        public List<TextureAnimation> Animations { get; } = new List<TextureAnimation>();
 
         public Texture Find(uint hash) => Textures.Find(t => t.TexHash == hash);
         public Texture Find(string name) => Textures.Find(t => t.Name.Contains(name));

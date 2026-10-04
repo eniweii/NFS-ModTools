@@ -16,10 +16,9 @@ namespace AssetDumper
 
             try
             {
-                return Parser.Default.ParseArguments(args, typeof(ExportBundleCommand), typeof(ExportFxTriggersCommand))
+                return Parser.Default.ParseArguments(args, typeof(ExportBundleCommand))
                     .MapResult(
                 (ExportBundleCommand cmd) => cmd.Execute(),
-                (ExportFxTriggersCommand cmd) => cmd.Execute(),
                 _ => 1);
             }
             catch (Exception e)
