@@ -93,6 +93,17 @@ namespace Common.Textures.Data
         public short? ScaleS { get; set; }
         public short? ScaleT { get; set; }
 
+        // Raw struct bytes without a confirmed meaning (Version3Tpk only), kept for the
+        // material dictionary so they can be compared between textures.
+        public byte? BiasLevel { get; set; }
+        public byte? RenderingOrder { get; set; }
+        public byte? ApplyAlphaSorting { get; set; }
+        public byte? RawFlags { get; set; }
+        public byte? MipmapBiasType { get; set; }
+        public byte? Pad { get; set; }
+        public byte? Pad2 { get; set; }
+        public byte[] Pad3 { get; set; }
+
         /// <summary>
         /// Writes DDS data to the given stream.
         /// </summary>

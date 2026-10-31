@@ -201,6 +201,19 @@ public static class CarbonMaterialDictionary
         public int Frame { get; set; }
     }
 
+    private class RawTextureRecord
+    {
+        public string ClassNameHash { get; set; }
+        public byte? BiasLevel { get; set; }
+        public byte? RenderingOrder { get; set; }
+        public byte? ApplyAlphaSorting { get; set; }
+        public byte? Flags { get; set; }
+        public byte? MipmapBiasType { get; set; }
+        public byte? Pad { get; set; }
+        public byte? Pad2 { get; set; }
+        public string Pad3 { get; set; }
+    }
+
     private class TextureRecord
     {
         public string Name { get; set; }
@@ -210,6 +223,7 @@ public static class CarbonMaterialDictionary
         public string AlphaBlend { get; set; }
         public string Tiling { get; set; }
         public string RenderFlags { get; set; }
+        public RawTextureRecord Raw { get; set; }
         public ScrollRecord Scroll { get; set; }
         public FrameRef FrameSwap { get; set; }
     }
@@ -229,6 +243,23 @@ public static class CarbonMaterialDictionary
         rec.AlphaBlend = tex.AlphaBlendType?.ToString();
         rec.Tiling = tex.TilableUV?.ToString();
         rec.RenderFlags = tex.RenderFlags?.ToString();
+
+        // Raw bytes for the plat viewer, written only when the texture came from a Version3Tpk.
+        if (tex.RenderingOrder != null)
+        {
+            rec.Raw = new RawTextureRecord
+            {
+                ClassNameHash = Hex(tex.TypeHash),
+                BiasLevel = tex.BiasLevel,
+                RenderingOrder = tex.RenderingOrder,
+                ApplyAlphaSorting = tex.ApplyAlphaSorting,
+                Flags = tex.RawFlags,
+                MipmapBiasType = tex.MipmapBiasType,
+                Pad = tex.Pad,
+                Pad2 = tex.Pad2,
+                Pad3 = tex.Pad3 == null ? null : Convert.ToHexString(tex.Pad3),
+            };
+        }
 
         // A smooth or snap scroll with speed 0 and 0 does not move, so it is no scroll.
         var zeroSpeed = (tex.ScrollSpeedS ?? 0) == 0 && (tex.ScrollSpeedT ?? 0) == 0;

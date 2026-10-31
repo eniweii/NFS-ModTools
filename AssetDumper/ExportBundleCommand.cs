@@ -227,6 +227,12 @@ public class ExportBundleCommand : BaseCommand
         CarbonMaterialDictionary.Reset();
         CarbonMaterialDictionary.RegisterAnimations(
             resources.OfType<TextureAnimationBank>().SelectMany(b => b.Animations));
+        // The animation container can also sit inside a texture pack (Version3Tpk reads it into
+        // TexturePack.Animations). Register those too; a key that is already known is skipped.
+        CarbonMaterialDictionary.RegisterAnimations(
+            resources.OfType<TexturePack>().SelectMany(p => p.Animations));
+        Log.Information("Registered {NumAnimations} texture animation(s) for the material dictionary",
+            CarbonMaterialDictionary.AnimationCount);
 
         // Duplicate SceneryGuids across nodes are not expected (every real
         // sample so far has been unique) - .First() rather than throwing

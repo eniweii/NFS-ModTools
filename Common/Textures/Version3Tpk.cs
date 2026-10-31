@@ -189,6 +189,14 @@ namespace Common.Textures
                 realTexture.OffsetT = texture.OffsetT;
                 realTexture.ScaleS = texture.ScaleS;
                 realTexture.ScaleT = texture.ScaleT;
+                realTexture.BiasLevel = texture.BiasLevel;
+                realTexture.RenderingOrder = texture.RenderingOrder;
+                realTexture.ApplyAlphaSorting = texture.ApplyAlphaSorting;
+                realTexture.RawFlags = texture.Flags;
+                realTexture.MipmapBiasType = texture.MipmapBiasType;
+                realTexture.Pad = texture.pad;
+                realTexture.Pad2 = texture.pad2;
+                realTexture.Pad3 = texture.pad3;
             }
 
             _texturePack.Textures.Add(realTexture);
